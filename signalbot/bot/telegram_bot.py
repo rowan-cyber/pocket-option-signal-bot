@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from html import escape
+
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -44,8 +46,14 @@ class SignalBot:
                 self.subscribers.add(int(cid))
             except ValueError:
                 log.warning("Ignoring invalid TELEGRAM_CHAT_IDS entry: %r", cid)
-        self.auto_running = config.autostart_signals
+        # Whether a fresh /start auto-subscribes the chat (admin intent).
+        self.autostart = config.autostart_signals
         self.app: Application | None = None
+
+    @property
+    def auto_running(self) -> bool:
+        """Auto-push is active whenever at least one chat is subscribed."""
+        return bool(self.subscribers)
 
     # ----- lifecycle -----
     def build(self) -> Application:
@@ -84,18 +92,32 @@ class SignalBot:
 
     # ----- helpers -----
     async def _reply(self, update: Update, text: str) -> None:
-        if update.message:
+        if not update.message:
+            return
+        try:
             await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        except Exception as exc:
+            log.warning("Failed to send reply: %s", exc)
 
     # ----- commands -----
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
-        self.subscribers.add(chat_id)
+        if self.autostart:
+            self.subscribers.add(chat_id)
+            sub_line = (
+                "You're subscribed to auto-pushed CALL/PUT signals based on a "
+                "confluence of indicators applied to Pocket Option market data."
+            )
+        else:
+            sub_line = (
+                "Auto-push is off by default here. Send <b>/signals on</b> to "
+                "start receiving CALL/PUT signals, or <b>/scan</b> for a one-off."
+            )
         await self._reply(
             update,
             "👋 <b>Welcome to the Pocket Option Signal Bot!</b>\n\n"
-            "You're subscribed to auto-pushed CALL/PUT signals based on a "
-            "confluence of indicators applied to Pocket Option market data.\n\n"
+            + sub_line
+            + "\n\n"
             + HELP_TEXT
             + "\n\n"
             + formatting.DISCLAIMER,
@@ -142,7 +164,6 @@ class SignalBot:
         chat_id = update.effective_chat.id
         if arg == "on":
             self.subscribers.add(chat_id)
-            self.auto_running = True
             await self._reply(update, "✅ Auto-push enabled for this chat.")
         elif arg == "off":
             self.subscribers.discard(chat_id)
@@ -158,7 +179,7 @@ class SignalBot:
         if not asset_utils.is_known_asset(asset):
             await self._reply(
                 update,
-                f"❓ Unknown asset <code>{asset}</code>. Try /assets to see valid names.",
+                f"❓ Unknown asset <code>{escape(asset)}</code>. Try /assets to see valid names.",
             )
             return
         if asset in self.config.assets:
@@ -174,9 +195,9 @@ class SignalBot:
         asset = asset_utils.normalize(context.args[0])
         if asset in self.config.assets:
             self.config.assets.remove(asset)
-            await self._reply(update, f"➖ Stopped watching <b>{asset}</b>.")
+            await self._reply(update, f"➖ Stopped watching <b>{escape(asset)}</b>.")
         else:
-            await self._reply(update, f"Not watching <code>{asset}</code>.")
+            await self._reply(update, f"Not watching <code>{escape(asset)}</code>.")
 
     async def cmd_assets(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         arg = (context.args[0].lower() if context.args else "")
@@ -189,7 +210,7 @@ class SignalBot:
 
     # ----- auto-push job -----
     async def _auto_scan_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self.auto_running or not self.subscribers:
+        if not self.subscribers:
             return
         try:
             signals = await self.engine.scan(apply_cooldown=True)
