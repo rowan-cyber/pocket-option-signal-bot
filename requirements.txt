@@ -1,0 +1,9 @@
+# Core
+python-telegram-bot[job-queue]>=21,<22
+pandas>=2.2
+numpy>=1.26
+python-dotenv>=1.0
+
+# Unofficial Pocket Option API (real market data via browser SSID).
+# Reverse-engineered community SDK; may break or violate Pocket Option ToS.
+pocketoptionapi-async>=2.0,<3
